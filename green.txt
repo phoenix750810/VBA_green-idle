@@ -1,1 +1,67 @@
-sub
+Sub FillShutdownHours_V2()
+    Dim wsData As Worksheet
+    Dim wsPlan As Worksheet
+    Dim lastRowData As Long, lastRowPlan As Long, lastColPlan As Long
+    Dim i As Long, j As Long, k As Long
+    Dim eqpId As String
+    Dim dateVal As Variant
+    Dim actualHours As Variant
+    Dim dictRow As Object
+    Dim dictCol As Object
+
+    ' 1. 指定工作表
+    On Error Resume Next
+    Set wsData = ThisWorkbook.Sheets("L5C_Close_Ratio_3_完整資料_data")
+    Set wsPlan = ThisWorkbook.Sheets("MachineDownTimePlan")
+    On Error GoTo 0
+    
+    If wsData Is Nothing Or wsPlan Is Nothing Then
+        MsgBox "找不到指定的工作表名稱，請確認名稱是否完全相符。", vbExclamation
+        Exit Sub
+    End If
+
+    ' 2. 初始化字典 (Dictionary) 建立快速索引
+    Set dictRow = CreateObject("Scripting.Dictionary")
+    Set dictCol = CreateObject("Scripting.Dictionary")
+
+    ' 3. 掃描 MachineDownTimePlan，建立 [設備ID] -> [GreenIdle所在列號] 的索引
+    lastRowPlan = wsPlan.Cells(wsPlan.Rows.Count, "C").End(xlUp).Row
+    For j = 2 To lastRowPlan
+        ' 確保只針對 E 欄為 GreenIdle 的列進行操作
+        If Trim(wsPlan.Cells(j, "E").Value) = "GreenIdle" Then
+            eqpId = Trim(CStr(wsPlan.Cells(j, "C").Value))
+            If Not dictRow.Exists(eqpId) Then
+                dictRow.Add eqpId, j
+            End If
+        End If
+    Next j
+
+    ' 4. 掃描 MachineDownTimePlan 第一列，建立 [日期] -> [所在欄號] 的索引
+    lastColPlan = wsPlan.Cells(1, wsPlan.Columns.Count).End(xlToLeft).Column
+    For k = 6 To lastColPlan ' 從 F 欄開始
+        dateVal = wsPlan.Cells(1, k).Value2 
+        If Not IsEmpty(dateVal) And Not dictCol.Exists(dateVal) Then
+            dictCol.Add dateVal, k
+        End If
+    Next k
+
+    ' 5. 掃描資料來源表，修正為讀取 N 欄 (實際關機時數)
+    lastRowData = wsData.Cells(wsData.Rows.Count, "C").End(xlUp).Row
+    For i = 2 To lastRowData
+        eqpId = Trim(CStr(wsData.Cells(i, "C").Value))
+        dateVal = wsData.Cells(i, "F").Value2 ' 讀取日期
+        
+        ' --- 修正處：將 O 欄改為 N 欄 ---
+        actualHours = wsData.Cells(i, "N").Value 
+
+        ' 若在計畫表中找到對應的設備與日期，則填入
+        If dictRow.Exists(eqpId) And dictCol.Exists(dateVal) Then
+            wsPlan.Cells(dictRow(eqpId), dictCol(dateVal)).Value = actualHours
+        End If
+    Next i
+
+    MsgBox "資料已成功填入 (來源：N 欄實際關機時數)！", vbInformation
+    
+    Set dictRow = Nothing
+    Set dictCol = Nothing
+End Sub
