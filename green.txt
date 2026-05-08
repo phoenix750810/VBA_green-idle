@@ -1,11 +1,12 @@
-Sub FillShutdownHours_V2()
+Sub FillShutdownHours_V3_Rounded()
     Dim wsData As Worksheet
     Dim wsPlan As Worksheet
     Dim lastRowData As Long, lastRowPlan As Long, lastColPlan As Long
     Dim i As Long, j As Long, k As Long
     Dim eqpId As String
     Dim dateVal As Variant
-    Dim actualHours As Variant
+    Dim actualValue As Variant
+    Dim roundedHours As Long
     Dim dictRow As Object
     Dim dictCol As Object
 
@@ -20,14 +21,13 @@ Sub FillShutdownHours_V2()
         Exit Sub
     End If
 
-    ' 2. 初始化字典 (Dictionary) 建立快速索引
+    ' 2. 初始化字典建立快速索引
     Set dictRow = CreateObject("Scripting.Dictionary")
     Set dictCol = CreateObject("Scripting.Dictionary")
 
     ' 3. 掃描 MachineDownTimePlan，建立 [設備ID] -> [GreenIdle所在列號] 的索引
     lastRowPlan = wsPlan.Cells(wsPlan.Rows.Count, "C").End(xlUp).Row
     For j = 2 To lastRowPlan
-        ' 確保只針對 E 欄為 GreenIdle 的列進行操作
         If Trim(wsPlan.Cells(j, "E").Value) = "GreenIdle" Then
             eqpId = Trim(CStr(wsPlan.Cells(j, "C").Value))
             If Not dictRow.Exists(eqpId) Then
@@ -38,29 +38,37 @@ Sub FillShutdownHours_V2()
 
     ' 4. 掃描 MachineDownTimePlan 第一列，建立 [日期] -> [所在欄號] 的索引
     lastColPlan = wsPlan.Cells(1, wsPlan.Columns.Count).End(xlToLeft).Column
-    For k = 6 To lastColPlan ' 從 F 欄開始
+    For k = 6 To lastColPlan
         dateVal = wsPlan.Cells(1, k).Value2 
         If Not IsEmpty(dateVal) And Not dictCol.Exists(dateVal) Then
             dictCol.Add dateVal, k
         End If
     Next k
 
-    ' 5. 掃描資料來源表，修正為讀取 N 欄 (實際關機時數)
+    ' 5. 掃描資料來源表，讀取 N 欄並進行四捨五入
     lastRowData = wsData.Cells(wsData.Rows.Count, "C").End(xlUp).Row
     For i = 2 To lastRowData
         eqpId = Trim(CStr(wsData.Cells(i, "C").Value))
-        dateVal = wsData.Cells(i, "F").Value2 ' 讀取日期
+        dateVal = wsData.Cells(i, "F").Value2
         
-        ' --- 修正處：將 O 欄改為 N 欄 ---
-        actualHours = wsData.Cells(i, "N").Value 
+        ' 讀取 N 欄原始數值
+        actualValue = wsData.Cells(i, "N").Value 
 
-        ' 若在計畫表中找到對應的設備與日期，則填入
-        If dictRow.Exists(eqpId) And dictCol.Exists(dateVal) Then
-            wsPlan.Cells(dictRow(eqpId), dictCol(dateVal)).Value = actualHours
+        ' 檢查數值是否為數字，避免空值或錯誤代碼導致程式中斷
+        If IsNumeric(actualValue) And Not IsEmpty(actualValue) Then
+            
+            ' --- 新增處：執行四捨五入到整數 ---
+            roundedHours = Application.WorksheetFunction.Round(actualValue, 0)
+
+            ' 若在計畫表中找到對應的設備與日期，則填入
+            If dictRow.Exists(eqpId) And dictCol.Exists(dateVal) Then
+                wsPlan.Cells(dictRow(eqpId), dictCol(dateVal)).Value = roundedHours
+            End If
+            
         End If
     Next i
 
-    MsgBox "資料已成功填入 (來源：N 欄實際關機時數)！", vbInformation
+    MsgBox "資料已成功填入，並已完成四捨五入至整數！", vbInformation
     
     Set dictRow = Nothing
     Set dictCol = Nothing
