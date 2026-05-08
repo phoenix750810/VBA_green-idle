@@ -1,1 +1,142 @@
 
+Sub GenerateShutdownLineList()
+    Dim wsData As Worksheet
+    Dim wsMapping As Worksheet
+    Dim wsNew As Worksheet
+    Dim ws As Worksheet
+    Dim r As Long, lastRowData As Long, lastRowMap As Long
+    
+    ' 建立字典來儲存機台與線別的對應關係
+    Dim dictEqpToLine As Object
+    Dim dictLineMembers As Object
+    Dim dictProcessed As Object
+    
+    Set dictEqpToLine = CreateObject("Scripting.Dictionary")
+    Set dictLineMembers = CreateObject("Scripting.Dictionary")
+    Set dictProcessed = CreateObject("Scripting.Dictionary")
+    
+    ' 1. 指定資料來源表 (圖一)
+    On Error Resume Next
+    Set wsData = ThisWorkbook.Sheets("L5C_Close_Ratio_3_完整資料_data")
+    On Error GoTo 0
+    
+    If wsData Is Nothing Then
+        MsgBox "找不到資料表 L5C_Close_Ratio_3_完整資料_data，請確認名稱。", vbExclamation
+        Exit Sub
+    End If
+    
+    ' 2. 自動尋找包含 K 欄 (Line_Id) 與 L 欄 (Eqp_Id) 的對應表 (圖三~圖七)
+    For Each ws In ThisWorkbook.Sheets
+        ' 掃描 K 欄前 3 列是否包含 "Line_Id" 標題
+        If InStr(1, ws.Cells(1, "K").Value & ws.Cells(2, "K").Value & ws.Cells(3, "K").Value, "Line_Id", vbTextCompare) > 0 Then
+            Set wsMapping = ws
+            Exit For
+        End If
+    Next ws
+    
+    If wsMapping Is Nothing Then
+        MsgBox "找不到包含 Line_Id(K欄) 與 Eqp_Id(L欄) 的對應表！" & vbCrLf & "請確保圖三~圖七的對應表放在同一個 Excel 檔案中。", vbExclamation
+        Exit Sub
+    End If
+    
+    Application.ScreenUpdating = False
+    
+    ' 3. 讀取並解析 K、L 欄的對應關係
+    lastRowMap = wsMapping.Cells(wsMapping.Rows.Count, "L").End(xlUp).Row
+    Dim currentLine As String
+    Dim valK As String, valL As String
+    
+    For r = 1 To lastRowMap
+        valK = Trim(wsMapping.Cells(r, "K").Value)
+        valL = Trim(wsMapping.Cells(r, "L").Value)
+        
+        ' 遇到新的線別 (排除空白、表頭與"合計"字眼)
+        If valK <> "" And InStr(valK, "合計") = 0 And InStr(valK, "Line_Id") = 0 Then
+            currentLine = valK
+            If Not dictLineMembers.Exists(currentLine) Then
+                Set dictLineMembers(currentLine) = CreateObject("Scripting.Dictionary")
+            End If
+        End If
+        
+        ' 紀錄機台屬於哪個線別，並將機台加入該線別的群組中
+        If valL <> "" And valL <> "Eqp_Id" And currentLine <> "" Then
+            dictEqpToLine(UCase(valL)) = currentLine
+            dictLineMembers(currentLine)(UCase(valL)) = 1
+        End If
+    Next r
+    
+    ' 4. 建立新的工作表 (若已存在則先刪除)
+    Application.DisplayAlerts = False
+    For Each ws In ThisWorkbook.Sheets
+        If ws.Name = "Shutdown_Line_List" Then ws.Delete
+    Next ws
+    Application.DisplayAlerts = True
+    
+    Set wsNew = ThisWorkbook.Sheets.Add(After:=wsData)
+    wsNew.Name = "Shutdown_Line_List"
+    wsNew.Cells(1, 1).Value = "EQP_ID"
+    wsNew.Cells(1, 2).Value = "MFG_DAY"
+    wsNew.Cells(1, 3).Value = "關機"
+    wsNew.Cells(1, 4).Value = "hrchg"
+    
+    ' 將日期欄位設為文字格式，避免 yyyy-mm-dd 被 Excel 自動變更
+    wsNew.Columns("B").NumberFormat = "@"
+    
+    ' 5. 掃描圖一資料並產生結果
+    lastRowData = wsData.Cells(wsData.Rows.Count, "C").End(xlUp).Row
+    
+    Dim outRow As Long
+    outRow = 2
+    Dim eqp As String, dateStr As String
+    Dim shutdownHrs As Double
+    Dim dateVal As Variant
+    Dim uniqKey As String, lineId As String
+    Dim mem As Variant
+    
+    For r = 2 To lastRowData
+        eqp = UCase(Trim(wsData.Cells(r, "C").Value))
+        dateVal = wsData.Cells(r, "F").Value
+        shutdownHrs = Val(wsData.Cells(r, "N").Value) ' 讀取 N 欄實際關機時數
+        
+        ' 條件：大於等於 6 小時
+        If shutdownHrs >= 6 Then
+            ' 確認該機台是否有在對應表中
+            If dictEqpToLine.Exists(eqp) Then
+                lineId = dictEqpToLine(eqp)
+                
+                ' 格式化日期為 yyyy-mm-dd
+                If IsDate(dateVal) Or (IsNumeric(dateVal) And Not IsEmpty(dateVal)) Then
+                    dateStr = Format(CDate(dateVal), "yyyy-mm-dd")
+                Else
+                    dateStr = CStr(dateVal)
+                End If
+                
+                ' 建立唯一識別碼 (線別+日期)，避免同天同線有多台 >=6 小時導致重複輸出
+                uniqKey = lineId & "|" & dateStr
+                
+                If Not dictProcessed.Exists(uniqKey) Then
+                    dictProcessed.Add uniqKey, 1
+                    
+                    ' 將該 Line 底下的所有機台全部展開寫入新 Sheet
+                    For Each mem In dictLineMembers(lineId).keys
+                        wsNew.Cells(outRow, 1).Value = mem
+                        wsNew.Cells(outRow, 2).Value = dateStr
+                        ' C 欄 (關機) 和 D 欄 (hrchg) 保持空白
+                        outRow = outRow + 1
+                    Next mem
+                End If
+            End If
+        End If
+    Next r
+    
+    ' 自動調整欄寬
+    wsNew.Columns("A:D").AutoFit
+    Application.ScreenUpdating = True
+    
+    MsgBox "新工作表 (Shutdown_Line_List) 已成功產生！共匯出 " & (outRow - 2) & " 筆資料。", vbInformation
+    
+    ' 釋放記憶體
+    Set dictEqpToLine = Nothing
+    Set dictLineMembers = Nothing
+    Set dictProcessed = Nothing
+End Sub
