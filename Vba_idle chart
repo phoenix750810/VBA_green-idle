@@ -1,0 +1,126 @@
+Sub CalculateShutdownLines()
+    Dim wsData As Worksheet
+    Dim wsTarget As Worksheet
+    Dim lastRowData As Long, lastColTarget As Long, lastRowTarget As Long
+    Dim i As Long, r As Long, c As Long
+    Dim eqpId As String, opType As String
+    Dim shutdownHours As Double
+    Dim dateVal As Variant
+    Dim strDate As String, key As String
+    
+    Dim dictCounts As Object
+    Dim dictRows As Object
+    Dim dictCols As Object
+    
+    ' 1. 指定工作表
+    On Error Resume Next
+    Set wsData = ThisWorkbook.Sheets("L5C_Close_Ratio_3_完整資料_data")
+    ' 【重要】請將下方的 "圖二的Sheet名稱" 替換成您實際的工作表名稱
+    Set wsTarget = ThisWorkbook.Sheets("6A_CF關機資料4月") 
+    On Error GoTo 0
+    
+    If wsData Is Nothing Or wsTarget Is Nothing Then
+        MsgBox "找不到指定的工作表，請確認程式碼中的工作表名稱是否與檔案相符！", vbExclamation
+        Exit Sub
+    End If
+    
+    Application.ScreenUpdating = False
+
+    ' 2. 初始化字典
+    Set dictCounts = CreateObject("Scripting.Dictionary") ' 紀錄 [日期|線別] 的數量
+    Set dictRows = CreateObject("Scripting.Dictionary")   ' 紀錄 圖二 各線別所在的列號
+    Set dictCols = CreateObject("Scripting.Dictionary")   ' 紀錄 圖二 各日期所在的欄號
+    
+    ' 3. 建立圖二的「線別對應列號」(掃描 B 欄)
+    lastRowTarget = wsTarget.Cells(wsTarget.Rows.Count, "B").End(xlUp).Row
+    For r = 4 To lastRowTarget
+        opType = Trim(UCase(wsTarget.Cells(r, "B").Value))
+        If opType <> "" Then
+            dictRows(opType) = r
+        End If
+    Next r
+    
+    ' 4. 建立圖二的「日期對應欄號」(掃描第 1 列，從第 8 欄(H)開始)
+    lastColTarget = wsTarget.Cells(4, wsTarget.Columns.Count).End(xlToLeft).Column
+    For c = 8 To lastColTarget
+        dateVal = wsTarget.Cells(1, c).Value
+        ' 若為有效日期，則將其格式化為字串做為 Key，確保比對精準
+        If IsDate(dateVal) Or (IsNumeric(dateVal) And Not IsEmpty(dateVal)) Then
+            strDate = Format(CDate(dateVal), "yyyy/mm/dd")
+            dictCols(strDate) = c ' 第一列有日期的欄位剛好對應「關機 Line」
+        End If
+    Next c
+
+    ' 5. 掃描圖一資料，計算符合條件的數量
+    lastRowData = wsData.Cells(wsData.Rows.Count, "C").End(xlUp).Row
+    For i = 2 To lastRowData
+        ' 讀取資料
+        eqpId = LCase(Trim(wsData.Cells(i, "C").Value)) ' 轉小寫方便比對
+        dateVal = wsData.Cells(i, "F").Value
+        shutdownHours = Val(wsData.Cells(i, "N").Value) ' 讀取 N 欄實際關機時數
+        
+        ' 判斷是否大於等於 6 小時
+        If shutdownHours >= 6 Then
+            opType = ""
+            
+            ' 判斷機台歸屬線別
+            If Left(eqpId, 3) = "fam" Then
+                opType = "BM"
+            ElseIf Left(eqpId, 3) = "far" Or Left(eqpId, 3) = "fag" Or Left(eqpId, 3) = "fab" Then
+                opType = "RGB"
+            ElseIf Left(eqpId, 3) = "fav" And Right(eqpId, 2) = "30" Then
+                opType = "RGB"
+            ElseIf Left(eqpId, 3) = "fao" Then
+                opType = "OC"
+            ElseIf Left(eqpId, 3) = "fav" And Right(eqpId, 2) = "20" Then
+                opType = "OC"
+            ElseIf Left(eqpId, 3) = "fas" Then
+                opType = "PS"
+            ElseIf Left(eqpId, 3) = "fav" And Right(eqpId, 2) = "10" Then
+                opType = "PS"
+            ElseIf Left(eqpId, 3) = "fai" Then
+                opType = "ITO"
+            End If
+            
+            ' 若有匹配的線別，則累加數量
+            If opType <> "" And (IsDate(dateVal) Or IsNumeric(dateVal)) Then
+                strDate = Format(CDate(dateVal), "yyyy/mm/dd")
+                key = strDate & "|" & opType
+                dictCounts(key) = dictCounts(key) + 1
+            End If
+        End If
+    Next i
+
+    ' 6. 將結果寫入圖二
+    Dim dKey As Variant, oKey As Variant
+    Dim targetTypes As Variant
+    targetTypes = Array("BM", "RGB", "OC", "PS", "ITO") ' 需要處理的線別清單
+    
+    ' 遍歷所有圖二中的日期欄位
+    For Each dKey In dictCols.keys
+        c = dictCols(dKey)
+        
+        ' 遍歷每個線別
+        For Each oKey In targetTypes
+            If dictRows.Exists(oKey) Then
+                r = dictRows(oKey)
+                key = dKey & "|" & oKey
+                
+                ' 如果有記錄就填入數量，沒有大於6小時的紀錄則填入 0
+                If dictCounts.Exists(key) Then
+                    wsTarget.Cells(r, c).Value = dictCounts(key)
+                Else
+                    wsTarget.Cells(r, c).Value = 0
+                End If
+            End If
+        Next oKey
+    Next dKey
+
+    Application.ScreenUpdating = True
+    MsgBox "關機 Line 統計完成！", vbInformation
+
+    ' 釋放記憶體
+    Set dictCounts = Nothing
+    Set dictRows = Nothing
+    Set dictCols = Nothing
+End Sub
